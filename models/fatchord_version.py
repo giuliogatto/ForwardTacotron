@@ -121,6 +121,7 @@ class WaveRNN(nn.Module):
         self.fc1 = nn.Linear(rnn_dims + self.aux_dims, fc_dims)
         self.fc2 = nn.Linear(fc_dims + self.aux_dims, fc_dims)
         self.fc3 = nn.Linear(fc_dims, self.n_classes)
+        self.sample_net = nn.Linear(self.n_classes, 1)
 
         self.register_buffer('step', torch.zeros(1, dtype=torch.long))
         self.num_params()
@@ -165,7 +166,8 @@ class WaveRNN(nn.Module):
 
         x = torch.cat([x, a4], dim=2)
         x = F.relu(self.fc2(x))
-        return self.fc3(x)
+        s = self.sample_net(x)
+        return self.fc3(x), s
 
     def forward_2(self, x_in, mels):
         device = next(self.parameters()).device  # use same device as parameters
@@ -201,12 +203,8 @@ class WaveRNN(nn.Module):
             x = F.relu(self.fc2(x))
 
             logits = self.fc3(x)
-            #posterior = F.softmax(logits, dim=1)
-            #distrib = torch.distributions.Categorical(posterior)
-            #sample = 2 * distrib.sample().float() / (self.n_classes - 1.) - 1.
-            sample = logits
-            output.append(sample)
-            #r = torch.LongTensor(1).random_(0, 100)
+            sample = self.sample_net(logits)
+            output.append(sample.squeeze())
             x = sample
 
         output = torch.stack(output).transpose(0, 1)
@@ -269,20 +267,14 @@ class WaveRNN(nn.Module):
                 logits = self.fc3(x)
 
                 if self.mode == 'MOL':
-                    #sample = logits.squeeze()#sample_from_discretized_mix_logistic(logits.unsqueeze(0).transpose(1, 2))
-                    sample = logits
-                    output.append(sample)
-                    # x = torch.FloatTensor([[sample]]).cuda()
+                    sample = self.sample_net(logits)
+                    output.append(sample.squeeze())
                     x = sample
-                    #print(sample)
 
                 elif self.mode == 'RAW':
-                    posterior = F.softmax(logits, dim=1)
-                    distrib = torch.distributions.Categorical(posterior)
-
-                    sample = 2 * distrib.sample().float() / (self.n_classes - 1.) - 1.
+                    sample = self.sample_net(logits)
                     output.append(sample)
-                    x = sample.unsqueeze(-1)
+                    x = sample
                 else:
                     raise RuntimeError("Unknown model mode value - ", self.mode)
 

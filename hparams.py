@@ -7,7 +7,7 @@ data_path = 'data/'
 
 # model ids are separate - that way you can use a new tts with an old wavernn and vice versa
 # NB: expect undefined behaviour if models were trained on different DSP settings
-voc_model_id = 'asvoice_mol'
+voc_model_id = 'asvoice_raw'
 tts_model_id = 'asvoice_tts'
 
 # set this to True if you are only interested in WaveRNN
@@ -40,7 +40,7 @@ n_val = 200                         # num validatino samples
 
 
 # Model Hparams
-voc_mode = 'MOL'                    # either 'RAW' (softmax on raw bits) or 'MOL' (sample from mixture of logistics)
+voc_mode = 'RAW'                    # either 'RAW' (softmax on raw bits) or 'MOL' (sample from mixture of logistics)
 voc_upsample_factors = (5, 5, 11)   # NB - this needs to correctly factorise hop_length
 voc_rnn_dims = 512
 voc_fc_dims = 512
@@ -51,10 +51,10 @@ voc_res_blocks = 10
 # Training
 
 voc_schedule = [(1e-4,  300_000,  32),        # progressive training schedule
-                (2e-5,  2_000_000,  2)]        # (lr, step, batch_size)
+                (2e-5,  2_000_000,  32)]        # (lr, step, batch_size)
 
 voc_checkpoint_every = 25_000
-voc_gen_samples_every = 1          # how often to generate samples for cherry-picking models
+voc_gen_samples_every = 100          # how often to generate samples for cherry-picking models
 voc_gen_num_samples = 3             # number of samples to generate for cherry-picking models
 voc_keep_top_k = 3                  # how many top performing models to keep
 voc_pad = 2                         # this will pad the input so that the resnet can 'see' wider than input length

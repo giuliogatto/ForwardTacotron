@@ -26,7 +26,7 @@ class VocTrainer:
     def __init__(self, paths: Paths) -> None:
         self.paths = paths
         self.writer = SummaryWriter(log_dir=paths.voc_log, comment='v1')
-        self.loss_func = F.cross_entropy if hp.voc_mode == 'RAW' else STFTLoss()
+        self.stft_loss = STFTLoss()
         path_top_k = paths.voc_top_k/'top_k.pkl'
         if os.path.exists(path_top_k):
             self.top_k_models = unpickle_binary(path_top_k)
@@ -62,21 +62,22 @@ class VocTrainer:
         loss_avg = Averager()
         duration_avg = Averager()
         device = next(model.parameters()).device  # use same device as model parameters
-        self.loss_func = self.loss_func.to(device)
+        self.stft_loss = self.stft_loss.to(device)
         for e in range(1, epochs + 1):
             for i, (x, y, m) in enumerate(session.train_set, 1):
                 start = time.time()
                 model.train()
                 x, m, y = x.to(device), m.to(device), y.to(device)
 
-                y_hat = model.forward_2(x, m)
-                if model.mode == 'RAW':
-                    y_hat = y_hat.transpose(1, 2).unsqueeze(-1)
-                elif model.mode == 'MOL':
-                    y = y.float()
-                y = y.unsqueeze(-1)
+                y_hat_l, y_hat = model.forward(x, m)
+                y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
+                y_l = y.unsqueeze(-1)
+                y = label_2_float(y, hp.bits).unsqueeze(-1)
 
-                loss = self.loss_func(y_hat, y)
+                loss_ce = F.cross_entropy(y_hat_l, y_l)
+                loss_l1 = F.l1_loss(y_hat, y)
+                loss = loss_ce + loss_l1
+
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), hp.voc_clip_grad_norm)
@@ -88,7 +89,7 @@ class VocTrainer:
                 duration_avg.add(time.time() - start)
                 speed = 1. / duration_avg.get()
                 msg = f'| Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {loss_avg.get():#.4} ' \
-                      f'| {speed:#.2} steps/s | Step: {k}k | '
+                      f'| Loss l1 {loss_l1.item():#.4} | {speed:#.2} steps/s | Step: {k}k | '
 
                 if step % hp.voc_gen_samples_every == 0:
                     stream(msg + 'generating samples...')
@@ -122,13 +123,14 @@ class VocTrainer:
         for i, (x, y, m) in enumerate(val_set, 1):
             x, m, y = x.to(device), m.to(device), y.to(device)
             with torch.no_grad():
-                y_hat = model.forward_2(x, m)
-                if model.mode == 'RAW':
-                    y_hat = y_hat.transpose(1, 2).unsqueeze(-1)
-                elif model.mode == 'MOL':
-                    y = y.float()
-                y = y.unsqueeze(-1)
-                loss = self.loss_func(y_hat, y)
+                y_hat_l, y_hat = model.forward(x, m)
+                y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
+                y_l = y.unsqueeze(-1)
+                y = label_2_float(y, hp.bits).unsqueeze(-1)
+
+                loss_ce = F.cross_entropy(y_hat_l, y_l)
+                loss_l1 = F.l1_loss(y_hat, y)
+                loss = loss_ce + loss_l1
                 val_loss += loss.item()
         return val_loss / len(val_set)
 
