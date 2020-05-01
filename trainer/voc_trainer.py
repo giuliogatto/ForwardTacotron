@@ -71,8 +71,7 @@ class VocTrainer:
                 start = time.time()
                 model.train()
                 x, m, y = x.to(device), m.to(device), y.to(device)
-                if random.random() < 0.1:
-                    print('ce loss')
+                if random.random() < 0.9:
                     y_hat_l, y_hat = model.forward(x, m)
                     y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
                     y_l = y.unsqueeze(-1)
@@ -82,7 +81,6 @@ class VocTrainer:
                     loss = loss_ce + loss_l1
                     loss_avg.add(loss.item())
                 else:
-                    print('stft loss')
                     y_hat = model.forward_2(x, m)
                     y = label_2_float(y, hp.bits).unsqueeze(-1)
                     loss = self.stft_loss(y_hat, y)
