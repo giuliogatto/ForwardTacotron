@@ -1,3 +1,4 @@
+import random
 import time
 import numpy as np
 from typing import Tuple
@@ -60,36 +61,44 @@ class VocTrainer:
             g['lr'] = session.lr
 
         loss_avg = Averager()
+        stft_loss_avg = Averager()
         duration_avg = Averager()
         device = next(model.parameters()).device  # use same device as model parameters
         self.stft_loss = self.stft_loss.to(device)
+
         for e in range(1, epochs + 1):
             for i, (x, y, m) in enumerate(session.train_set, 1):
                 start = time.time()
                 model.train()
                 x, m, y = x.to(device), m.to(device), y.to(device)
-
-                y_hat_l, y_hat = model.forward(x, m)
-                y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
-                y_l = y.unsqueeze(-1)
-                y = label_2_float(y, hp.bits).unsqueeze(-1)
-
-                loss_ce = F.cross_entropy(y_hat_l, y_l)
-                loss_l1 = F.l1_loss(y_hat, y)
-                loss = loss_ce + loss_l1
+                if random.random() < 0.1:
+                    print('ce loss')
+                    y_hat_l, y_hat = model.forward(x, m)
+                    y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
+                    y_l = y.unsqueeze(-1)
+                    y = label_2_float(y, hp.bits).unsqueeze(-1)
+                    loss_ce = F.cross_entropy(y_hat_l, y_l)
+                    loss_l1 = F.l1_loss(y_hat, y)
+                    loss = loss_ce + loss_l1
+                    loss_avg.add(loss.item())
+                else:
+                    print('stft loss')
+                    y_hat = model.forward_2(x, m)
+                    y = label_2_float(y, hp.bits).unsqueeze(-1)
+                    loss = self.stft_loss(y_hat, y)
+                    stft_loss_avg.add(loss.item())
 
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), hp.voc_clip_grad_norm)
                 optimizer.step()
-                loss_avg.add(loss.item())
                 step = model.get_step()
                 k = step // 1000
 
                 duration_avg.add(time.time() - start)
                 speed = 1. / duration_avg.get()
                 msg = f'| Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {loss_avg.get():#.4} ' \
-                      f'| Loss l1 {loss_l1.item():#.4} | {speed:#.2} steps/s | Step: {k}k | '
+                      f'| Stft Loss: {stft_loss_avg.get():#.4} | {speed:#.2} steps/s | Step: {k}k | '
 
                 if step % hp.voc_gen_samples_every == 0:
                     stream(msg + 'generating samples...')
@@ -103,6 +112,7 @@ class VocTrainer:
                                     name=ckpt_name, is_silent=True)
 
                 self.writer.add_scalar('Loss/train', loss, model.get_step())
+                self.writer.add_scalar('Loss/train_stft', stft_loss_avg.get(), model.get_step())
                 self.writer.add_scalar('Params/batch_size', session.bs, model.get_step())
                 self.writer.add_scalar('Params/learning_rate', session.lr, model.get_step())
 
@@ -113,6 +123,7 @@ class VocTrainer:
             save_checkpoint('voc', self.paths, model, optimizer, is_silent=True)
 
             loss_avg.reset()
+            stft_loss_avg.reset()
             duration_avg.reset()
             print(' ')
 

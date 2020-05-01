@@ -57,7 +57,7 @@ class Averager:
         self.count = 0
 
     def get(self):
-        return self.val / self.count
+        return 0. if self.count == 0 else self.val / self.count
 
 
 class MaskedL1(torch.nn.Module):
