@@ -109,7 +109,7 @@ class VocTrainer:
                     save_checkpoint('voc', self.paths, model, optimizer,
                                     name=ckpt_name, is_silent=True)
 
-                self.writer.add_scalar('Loss/train', loss, model.get_step())
+                self.writer.add_scalar('Loss/train', loss_avg.get(), model.get_step())
                 self.writer.add_scalar('Loss/train_stft', stft_loss_avg.get(), model.get_step())
                 self.writer.add_scalar('Params/batch_size', session.bs, model.get_step())
                 self.writer.add_scalar('Params/learning_rate', session.lr, model.get_step())
