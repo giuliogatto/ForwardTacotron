@@ -75,7 +75,7 @@ class VocTrainer:
                 y_hat_l, y_hat = model.forward(x, m)
                 y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
                 y_l = y.unsqueeze(-1)
-                y = torch.tensor(decode_mu_law(y.detach().numpy(), hp.bits).unsqueeze(-1)).to(device)
+                y = torch.tensor(decode_mu_law(y.detach().cpu().numpy(), hp.bits).unsqueeze(-1)).to(device)
                 loss_ce = F.cross_entropy(y_hat_l, y_l)
                 loss_l1 = F.l1_loss(y_hat, y)
                 loss = loss_ce + loss_l1
@@ -134,7 +134,7 @@ class VocTrainer:
                 y_hat_l, y_hat = model.forward(x, m)
                 y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
                 y_l = y.unsqueeze(-1)
-                y = torch.tensor(decode_mu_law(y.detach().numpy(), hp.bits)).unsqueeze(-1).to(device)
+                y = torch.tensor(decode_mu_law(y.detach().cpu().numpy(), hp.bits)).unsqueeze(-1).to(device)
 
                 loss_ce = F.cross_entropy(y_hat_l, y_l)
                 loss_l1 = F.l1_loss(y_hat, y)
