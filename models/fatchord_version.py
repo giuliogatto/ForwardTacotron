@@ -167,7 +167,11 @@ class WaveRNN(nn.Module):
         x = torch.cat([x, a4], dim=2)
         x = F.relu(self.fc2(x))
         s = self.sample_net(x)
-        return self.fc3(x), s
+
+        amax = torch.argmax(x, dim=-1)
+        sample = amax.float() / (self.n_classes - 1.) - 1.
+
+        return self.fc3(x), s, sample
 
     def forward_2(self, x_in, mels):
         device = next(self.parameters()).device  # use same device as parameters
