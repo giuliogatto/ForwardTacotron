@@ -71,20 +71,15 @@ class VocTrainer:
                 start = time.time()
                 model.train()
                 x, m, y = x.to(device), m.to(device), y.to(device)
-                if random.random() < 0.9:
-                    y_hat_l, y_hat = model.forward(x, m)
-                    y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
-                    y_l = y.unsqueeze(-1)
-                    y = label_2_float(y, hp.bits).unsqueeze(-1)
-                    loss_ce = F.cross_entropy(y_hat_l, y_l)
-                    loss_l1 = F.l1_loss(y_hat, y)
-                    loss = loss_ce + loss_l1
-                    loss_avg.add(loss.item())
-                else:
-                    y_hat = model.forward_2(x, m)
-                    y = label_2_float(y, hp.bits).unsqueeze(-1)
-                    loss = self.stft_loss(y_hat, y)
-                    stft_loss_avg.add(loss.item())
+
+                y_hat_l, y_hat = model.forward(x, m)
+                y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
+                y_l = y.unsqueeze(-1)
+                y = label_2_float(y, hp.bits).unsqueeze(-1)
+                loss_ce = F.cross_entropy(y_hat_l, y_l)
+                loss_l1 = F.l1_loss(y_hat, y)
+                loss = loss_ce + loss_l1
+                loss_avg.add(loss.item())
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -100,24 +95,27 @@ class VocTrainer:
 
                 if step % hp.voc_gen_samples_every == 0:
                     stream(msg + 'generating samples...')
-                    mel_loss, gen_wav = self.generate_samples(model, session)
-                    self.writer.add_scalar('Loss/generated_mel_l1', mel_loss, model.get_step())
-                    self.track_top_models(mel_loss, gen_wav, model)
+                    res = self.generate_samples(model, session)
+                    if res is not None:
+                        mel_loss, gen_wav = res
+                        self.writer.add_scalar('Loss/generated_mel_l1', mel_loss, model.get_step())
+                        self.track_top_models(mel_loss, gen_wav, model)
 
                 if step % hp.voc_checkpoint_every == 0:
                     ckpt_name = f'wave_step{k}K'
                     save_checkpoint('voc', self.paths, model, optimizer,
                                     name=ckpt_name, is_silent=True)
 
-                self.writer.add_scalar('Loss/train', loss_avg.get(), model.get_step())
-                self.writer.add_scalar('Loss/train_stft', stft_loss_avg.get(), model.get_step())
+                self.writer.add_scalar('Loss/train', loss, model.get_step())
+                self.writer.add_scalar('Loss/train_l1', loss_l1, model.get_step())
                 self.writer.add_scalar('Params/batch_size', session.bs, model.get_step())
                 self.writer.add_scalar('Params/learning_rate', session.lr, model.get_step())
 
                 stream(msg)
 
-            val_loss = self.evaluate(model, session.val_set)
-            self.writer.add_scalar('Loss/val', val_loss, model.get_step())
+            val_loss_ce, val_loss_l1 = self.evaluate(model, session.val_set)
+            self.writer.add_scalar('Loss/val_ce', val_loss_ce, model.get_step())
+            self.writer.add_scalar('Loss/val_l1', val_loss_l1, model.get_step())
             save_checkpoint('voc', self.paths, model, optimizer, is_silent=True)
 
             loss_avg.reset()
@@ -125,9 +123,10 @@ class VocTrainer:
             duration_avg.reset()
             print(' ')
 
-    def evaluate(self, model: WaveRNN, val_set: Dataset) -> float:
+    def evaluate(self, model: WaveRNN, val_set: Dataset):
         model.eval()
-        val_loss = 0
+        val_loss_ce = 0
+        val_loss_l1 = 0
         device = next(model.parameters()).device
         for i, (x, y, m) in enumerate(val_set, 1):
             x, m, y = x.to(device), m.to(device), y.to(device)
@@ -139,9 +138,9 @@ class VocTrainer:
 
                 loss_ce = F.cross_entropy(y_hat_l, y_l)
                 loss_l1 = F.l1_loss(y_hat, y)
-                loss = loss_ce + loss_l1
-                val_loss += loss.item()
-        return val_loss / len(val_set)
+                val_loss_ce += loss_ce.item()
+                val_loss_l1 += loss_l1.item()
+        return val_loss_ce / len(val_set), val_loss_l1 / len/(val_set)
 
     @ignore_exception
     def generate_samples(self, model: WaveRNN, session: VocSession) -> Tuple[float, list]:
