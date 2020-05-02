@@ -285,8 +285,8 @@ class WaveRNN(nn.Module):
         output = output.cpu().numpy()
         output = output.astype(np.float64)
 
-        if mu_law:
-            output = decode_mu_law(output, self.n_classes, False)
+        #if mu_law:
+        #    output = decode_mu_law(output, self.n_classes, False)
 
         if batched and not self.mode == 'MOL':
             output = self.xfade_and_unfold(output, target, overlap)
