@@ -140,7 +140,7 @@ class VocTrainer:
                 loss_l1 = F.l1_loss(y_hat, y)
                 val_loss_ce += loss_ce.item()
                 val_loss_l1 += loss_l1.item()
-        return val_loss_ce / len(val_set), val_loss_l1 / len/(val_set)
+        return val_loss_ce / len(val_set), val_loss_l1 / len(val_set)
 
     @ignore_exception
     def generate_samples(self, model: WaveRNN, session: VocSession) -> Tuple[float, list]:
