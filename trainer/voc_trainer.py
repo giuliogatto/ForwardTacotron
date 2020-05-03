@@ -27,6 +27,7 @@ class VocTrainer:
     def __init__(self, paths: Paths) -> None:
         self.paths = paths
         self.writer = SummaryWriter(log_dir=paths.voc_log, comment='v1')
+        self.loss_func = F.cross_entropy if hp.voc_mode == 'RAW' else discretized_mix_logistic_loss
         self.stft_loss = STFTLoss()
         path_top_k = paths.voc_top_k/'top_k.pkl'
         if os.path.exists(path_top_k):
@@ -61,7 +62,6 @@ class VocTrainer:
             g['lr'] = session.lr
 
         loss_avg = Averager()
-        stft_loss_avg = Averager()
         duration_avg = Averager()
         device = next(model.parameters()).device  # use same device as model parameters
         self.stft_loss = self.stft_loss.to(device)
@@ -72,75 +72,72 @@ class VocTrainer:
                 model.train()
                 x, m, y = x.to(device), m.to(device), y.to(device)
 
-                y_hat_l, y_hat, sample = model.forward(x, m)
-                y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
-                y_l = y.unsqueeze(-1)
-                y = sample.unsqueeze(-1)
-                loss_ce = F.cross_entropy(y_hat_l, y_l)
-                loss_l1 = F.l1_loss(y_hat, y)
-                loss = loss_ce + loss_l1
-                loss_avg.add(loss.item())
+
+                y = y.float()
+                y = y.unsqueeze(-1)
+
+                if random.random() < 0.1:
+                    y_hat = model.forward_2(x, m)
+                    loss = self.stft_loss(y_hat, y)
+                    self.writer.add_scalar('Loss/train_stft', loss, model.get_step())
+                else:
+                    y_hat = model.forward(x, m)
+                    loss = self.loss_func(y_hat, y)
+                self.writer.add_scalar('Loss/train_mol', loss, model.get_step())
 
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), hp.voc_clip_grad_norm)
                 optimizer.step()
+                loss_avg.add(loss.item())
                 step = model.get_step()
                 k = step // 1000
 
                 duration_avg.add(time.time() - start)
                 speed = 1. / duration_avg.get()
                 msg = f'| Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {loss_avg.get():#.4} ' \
-                      f'| Stft Loss: {stft_loss_avg.get():#.4} | {speed:#.2} steps/s | Step: {k}k | '
+                      f'| {speed:#.2} steps/s | Step: {k}k | '
 
                 if step % hp.voc_gen_samples_every == 0:
                     stream(msg + 'generating samples...')
-                    res = self.generate_samples(model, session)
-                    if res is not None:
-                        mel_loss, gen_wav = res
-                        self.writer.add_scalar('Loss/generated_mel_l1', mel_loss, model.get_step())
-                        self.track_top_models(mel_loss, gen_wav, model)
+                    mel_loss, gen_wav = self.generate_samples(model, session)
+                    self.writer.add_scalar('Loss/generated_mel_l1', mel_loss, model.get_step())
+                    self.track_top_models(mel_loss, gen_wav, model)
 
                 if step % hp.voc_checkpoint_every == 0:
                     ckpt_name = f'wave_step{k}K'
                     save_checkpoint('voc', self.paths, model, optimizer,
                                     name=ckpt_name, is_silent=True)
 
-                self.writer.add_scalar('Loss/train', loss, model.get_step())
-                self.writer.add_scalar('Loss/train_l1', loss_l1, model.get_step())
                 self.writer.add_scalar('Params/batch_size', session.bs, model.get_step())
                 self.writer.add_scalar('Params/learning_rate', session.lr, model.get_step())
 
                 stream(msg)
 
-            val_loss_ce, val_loss_l1 = self.evaluate(model, session.val_set)
-            self.writer.add_scalar('Loss/val_ce', val_loss_ce, model.get_step())
-            self.writer.add_scalar('Loss/val_l1', val_loss_l1, model.get_step())
+            val_loss = self.evaluate(model, session.val_set)
+            self.writer.add_scalar('Loss/val', val_loss, model.get_step())
             save_checkpoint('voc', self.paths, model, optimizer, is_silent=True)
 
             loss_avg.reset()
-            stft_loss_avg.reset()
             duration_avg.reset()
             print(' ')
 
-    def evaluate(self, model: WaveRNN, val_set: Dataset):
+    def evaluate(self, model: WaveRNN, val_set: Dataset) -> float:
         model.eval()
-        val_loss_ce = 0
-        val_loss_l1 = 0
+        val_loss = 0
         device = next(model.parameters()).device
         for i, (x, y, m) in enumerate(val_set, 1):
             x, m, y = x.to(device), m.to(device), y.to(device)
             with torch.no_grad():
-                y_hat_l, y_hat, sample = model.forward(x, m)
-                y_hat_l = y_hat_l.transpose(1, 2).unsqueeze(-1)
-                y_l = y.unsqueeze(-1)
-                y = sample.unsqueeze(-1)
-
-                loss_ce = F.cross_entropy(y_hat_l, y_l)
-                loss_l1 = F.l1_loss(y_hat, y)
-                val_loss_ce += loss_ce.item()
-                val_loss_l1 += loss_l1.item()
-        return val_loss_ce / len(val_set), val_loss_l1 / len(val_set)
+                y_hat = model(x, m)
+                if model.mode == 'RAW':
+                    y_hat = y_hat.transpose(1, 2).unsqueeze(-1)
+                elif model.mode == 'MOL':
+                    y = y.float()
+                y = y.unsqueeze(-1)
+                loss = self.loss_func(y_hat, y)
+                val_loss += loss.item()
+        return val_loss / len(val_set)
 
     @ignore_exception
     def generate_samples(self, model: WaveRNN, session: VocSession) -> Tuple[float, list]:
@@ -162,7 +159,7 @@ class VocTrainer:
             else:
                 x = label_2_float(x, bits)
             gen_wav = model.generate(
-                mels=m, save_path=None, batched=False,
+                mels=m, save_path=None, batched=hp.voc_gen_batched,
                 target=hp.voc_target, overlap=hp.voc_overlap,
                 mu_law=hp.mu_law, silent=True)
 
@@ -171,7 +168,6 @@ class VocTrainer:
             y_mel = torch.tensor(y_mel).to(device)
             y_hat_mel = raw_melspec(gen_wav)
             y_hat_mel = torch.tensor(y_hat_mel).to(device)
-            print(f'y_hat_mel {y_hat_mel.shape} y_mel {y_mel.shape}')
             loss = F.l1_loss(y_hat_mel, y_mel)
             mel_losses.append(loss.item())
 

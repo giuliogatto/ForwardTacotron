@@ -99,7 +99,7 @@ class WaveRNN(nn.Module):
         if self.mode == 'RAW':
             self.n_classes = 2 ** bits
         elif self.mode == 'MOL':
-            self.n_classes = 1
+            self.n_classes = 30
         else:
             RuntimeError("Unknown model mode value - ", self.mode)
 
@@ -121,13 +121,15 @@ class WaveRNN(nn.Module):
         self.fc1 = nn.Linear(rnn_dims + self.aux_dims, fc_dims)
         self.fc2 = nn.Linear(fc_dims + self.aux_dims, fc_dims)
         self.fc3 = nn.Linear(fc_dims, self.n_classes)
-        self.sample_net = nn.Linear(self.n_classes, 1)
 
         self.register_buffer('step', torch.zeros(1, dtype=torch.long))
         self.num_params()
 
         # Avoid fragmentation of RNN parameters and associated warning
         self._flatten_parameters()
+
+
+
 
     def forward(self, x, mels):
         device = next(self.parameters()).device  # use same device as parameters
@@ -137,8 +139,7 @@ class WaveRNN(nn.Module):
         # weights are contiguous in GPU memory. Hence, we must call it again
         self._flatten_parameters()
 
-        if self.training:
-            self.step += 1
+        self.step += 1
         bsize = x.size(0)
         h1 = torch.zeros(1, bsize, self.rnn_dims, device=device)
         h2 = torch.zeros(1, bsize, self.rnn_dims, device=device)
@@ -166,12 +167,7 @@ class WaveRNN(nn.Module):
 
         x = torch.cat([x, a4], dim=2)
         x = F.relu(self.fc2(x))
-        s = self.sample_net(x)
-
-        amax = torch.argmax(x, dim=-1)
-        sample = amax.float() / (self.n_classes - 1.) - 1.
-
-        return self.fc3(x), s, sample
+        return self.fc3(x)
 
     def forward_2(self, x_in, mels):
         device = next(self.parameters()).device  # use same device as parameters
@@ -207,14 +203,14 @@ class WaveRNN(nn.Module):
             x = F.relu(self.fc2(x))
 
             logits = self.fc3(x)
-            sample = self.sample_net(logits)
-            output.append(sample.squeeze())
-            x = sample
+            sample = sample_from_discretized_mix_logistic(logits.unsqueeze(0).transpose(1, 2))
+            output.append(sample.view(-1))
+            x = sample.transpose(0, 1)
 
         output = torch.stack(output).transpose(0, 1)
         return output
 
-    def generate(self, mels, save_path: Union[str, Path], batched, target, overlap, mu_law, silent=False):
+    def generate(self, mels, save_path: Union[str, Path], batched, target, overlap, mu_law):
         self.eval()
 
         device = next(self.parameters()).device  # use same device as parameters
@@ -271,19 +267,22 @@ class WaveRNN(nn.Module):
                 logits = self.fc3(x)
 
                 if self.mode == 'MOL':
-                    sample = self.sample_net(logits)
-                    output.append(sample.squeeze())
-                    x = sample
+                    sample = sample_from_discretized_mix_logistic(logits.unsqueeze(0).transpose(1, 2))
+                    output.append(sample.view(-1))
+                    # x = torch.FloatTensor([[sample]]).cuda()
+                    x = sample.transpose(0, 1)
 
                 elif self.mode == 'RAW':
-                    sample = self.sample_net(logits)
+                    posterior = F.softmax(logits, dim=1)
+                    distrib = torch.distributions.Categorical(posterior)
+
+                    sample = 2 * distrib.sample().float() / (self.n_classes - 1.) - 1.
                     output.append(sample)
-                    x = sample
+                    x = sample.unsqueeze(-1)
                 else:
                     raise RuntimeError("Unknown model mode value - ", self.mode)
 
-                if not silent and i % 100 == 0:
-                    self.gen_display(i, seq_len, b_size, start)
+                if i % 100 == 0: self.gen_display(i, seq_len, b_size, start)
 
         output = torch.stack(output).transpose(0, 1)
         output = output.cpu().numpy()
@@ -292,20 +291,17 @@ class WaveRNN(nn.Module):
         if mu_law:
             output = decode_mu_law(output, self.n_classes, False)
 
-        if batched and not self.mode == 'MOL':
+        if batched:
             output = self.xfade_and_unfold(output, target, overlap)
         else:
-            output = output[0].squeeze()
-        print(f'output shape {output.shape}')
-
+            output = output[0]
 
         # Fade-out at the end to avoid signal cutting out suddenly
         fade_out = np.linspace(1, 0, 20 * self.hop_length)
         output = output[:wave_len]
         output[-20 * self.hop_length:] *= fade_out
 
-        if save_path is not None:
-            save_wav(output, save_path)
+        save_wav(output, save_path)
 
         self.train()
 
