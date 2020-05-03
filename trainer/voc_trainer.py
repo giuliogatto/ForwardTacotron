@@ -83,7 +83,7 @@ class VocTrainer:
                 else:
                     y_hat = model.forward(x, m)
                     loss = self.loss_func(y_hat, y)
-                self.writer.add_scalar('Loss/train_mol', loss, model.get_step())
+                    self.writer.add_scalar('Loss/train_mol', loss, model.get_step())
 
                 optimizer.zero_grad()
                 loss.backward()
