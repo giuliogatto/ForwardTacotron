@@ -75,13 +75,17 @@ class VocTrainer:
                 x, m, y = x.to(device), m.to(device), y.to(device)
 
                 y_hat = model(x, m)
+                y_hat2 = model.forward_2(x, m)
                 if model.mode == 'RAW':
                     y_hat = y_hat.transpose(1, 2).unsqueeze(-1)
+                    y_hat2 = y_hat2.transpose(1, 2).unsqueeze(-1)
                 elif model.mode == 'MOL':
                     y = y.float()
                 y = y.unsqueeze(-1)
 
-                loss = self.loss_func(y_hat, y)
+                loss_teacher = self.loss_func(y_hat, y)
+                loss_auto = self.loss_func(y_hat2, y)
+                loss = loss_teacher + loss_auto
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), hp.voc_clip_grad_norm)
@@ -108,7 +112,8 @@ class VocTrainer:
                     save_checkpoint('voc', self.paths, model, optimizer,
                                     name=ckpt_name, is_silent=True)
 
-                self.writer.add_scalar('Loss/train', loss, model.get_step())
+                self.writer.add_scalar('Loss/train_tf', loss_teacher, model.get_step())
+                self.writer.add_scalar('Loss/train_auto', loss_auto, model.get_step())
                 self.writer.add_scalar('Params/batch_size', session.bs, model.get_step())
                 self.writer.add_scalar('Params/learning_rate', session.lr, model.get_step())
 
